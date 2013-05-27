@@ -9,6 +9,8 @@ Twitter Platform objects.
 @see: U{https://dev.twitter.com/docs/platform-objects}.
 """
 
+from twisted.python import log
+
 class TwitterObject(object):
     """
     A Twitter Platform object.

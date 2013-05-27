@@ -13,7 +13,7 @@ from twisted.web import error as http_error
 from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 
-from twittytwister import twitter, platform, streaming
+from twittytwister import twitter, platform
 
 DELAY_INITIAL = twitter.TwitterMonitor.backOffs[None]['initial']
 
