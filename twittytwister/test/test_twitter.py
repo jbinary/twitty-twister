@@ -13,7 +13,7 @@ from twisted.web import error as http_error
 from twisted.web.client import ResponseDone
 from twisted.web.http import PotentialDataLoss
 
-from twittytwister import twitter, streaming
+from twittytwister import twitter, platform, streaming
 
 DELAY_INITIAL = twitter.TwitterMonitor.backOffs[None]['initial']
 
@@ -23,7 +23,7 @@ class TwitterFeedTest(unittest.TestCase):
     """
 
     def setUp(self):
-        self.feed = twitter.TwitterFeed()
+        self.feed = twitter.TwitterFeed(consumer="", token="")
         self.calls = []
 
 
@@ -686,7 +686,7 @@ class TwitterMonitorTest(unittest.TestCase):
         self.setUpState('connected')
         self.clock.advance(0)
 
-        status = streaming.Status.fromDict({'text': u'Hello!'})
+        status = platform.Status.fromDict({'text': u'Hello!'})
         self.api.delegate(status)
         self.assertEqual([status], self.entries)
 
@@ -700,7 +700,7 @@ class TwitterMonitorTest(unittest.TestCase):
 
         self.monitor.delegate = None
 
-        status = streaming.Status.fromDict({'text': u'Hello!'})
+        status = platform.Status.fromDict({'text': u'Hello!'})
         self.api.delegate(status)
 
 
@@ -718,7 +718,7 @@ class TwitterMonitorTest(unittest.TestCase):
         self.setUpState('connected')
         self.clock.advance(0)
 
-        status = streaming.Status.fromDict({'text': u'Hello!'})
+        status = platform.Status.fromDict({'text': u'Hello!'})
         self.api.delegate(status)
 
         self.assertEqual(1, len(self.flushLoggedErrors(Error)))
