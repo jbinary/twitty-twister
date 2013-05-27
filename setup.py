@@ -13,5 +13,6 @@ setup(name='twittytwister',
         'oauth',
         'simplejson',
         'Twisted',
+        'treq',
     ]
 )
