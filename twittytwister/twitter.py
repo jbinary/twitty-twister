@@ -10,10 +10,11 @@ Twisted Twitter interface.
 """
 
 import base64
-import urllib
+import logging
 import mimetypes
 import mimetools
-import logging
+import urllib
+import warnings
 
 from oauth import oauth
 
@@ -23,14 +24,17 @@ from twisted.internet import error as ierror
 from twisted.python import failure, log
 from twisted.web import client, error, http_headers
 
-from twittytwister import streaming, txml
+import treq
+
+from twittytwister import platform, streaming, txml
 
 SIGNATURE_METHOD = oauth.OAuthSignatureMethod_HMAC_SHA1()
 
-BASE_URL="https://api.twitter.com/1"
+BASE_URL="https://api.twitter.com/1.1"
 SEARCH_URL="http://search.twitter.com/search.atom"
 
-
+logging.basicConfig()
+logging.getLogger().setLevel(logging.DEBUG)
 logger = logging.getLogger('twittytwister.twitter')
 
 
@@ -110,14 +114,21 @@ class Twitter(object):
     agent="twitty twister"
 
     def __init__(self, user=None, passwd=None,
-        base_url=BASE_URL, search_url=SEARCH_URL,
-                 consumer=None, token=None, signature_method=SIGNATURE_METHOD,client_info = None, timeout=0):
+                 base_url=BASE_URL, search_url=SEARCH_URL,
+                 consumer=None, token=None,
+                 signature_method=SIGNATURE_METHOD,
+                 client_info = None, timeout=0):
+        """
+        @param consumer: The OAuth consumer.
+        @type consumer: L{oauth.ouath.OAuthConsumer}
+
+        @param token: The OAuth token.
+        @type token: L{oauth.ouath.OAuthToken}
+        """
 
         self.base_url = base_url
         self.search_url = search_url
 
-        self.use_auth = False
-        self.use_oauth = False
         self.client_info = None
         self.timeout = timeout
 
@@ -126,23 +137,25 @@ class Twitter(object):
         self.rate_limit_remaining = None
         self.rate_limit_reset = None
 
-        if user and passwd:
-            self.use_auth = True
-            self.username = user
-            self.password = passwd
+        if user is not None:
+            warnings.warn(
+                "Twitter no longer supports basic authentication. Instead, "
+                "provide OAuth credentials in the consumer and token "
+                "arguments.",
+                DeprecationWarning, 2)
 
-        if consumer and token:
-            self.use_auth = True
-            self.use_oauth = True
-            self.consumer = consumer
-            self.token = token
-            self.signature_method = signature_method
+        if consumer is None or token is None:
+            raise ValueError("Missing OAuth credentials")
+
+        self.consumer = consumer
+        self.token = token
+        self.signature_method = signature_method
 
         if client_info != None:
             self.client_info = client_info
 
 
-    def __makeOAuthHeader(self, method, url, parameters={}, headers={}):
+    def _makeAuthHeader(self, method, url, parameters={}, headers={}):
         oauth_request = oauth.OAuthRequest.from_consumer_and_token(self.consumer,
             token=self.token, http_method=method, http_url=url, parameters=parameters)
         oauth_request.sign_request(self.signature_method, self.consumer, self.token)
@@ -150,23 +163,6 @@ class Twitter(object):
         headers.update(oauth_request.to_header())
         return headers
 
-    def __makeAuthHeader(self, headers={}):
-        authorization = base64.encodestring('%s:%s'
-            % (self.username, self.password))[:-1]
-        headers['Authorization'] = "Basic %s" % authorization
-        return headers
-
-    def _makeAuthHeader(self, method, url, parameters={}, headers={}):
-        if self.use_oauth:
-            return self.__makeOAuthHeader(method, url, parameters, headers)
-        else:
-            return self.__makeAuthHeader(headers)
-
-    def makeAuthHeader(self, method, url, parameters={}, headers={}):
-        if self.use_auth:
-            return self._makeAuthHeader(method, url, parameters, headers)
-        else:
-            return headers
 
     def _urlencode(self, h):
         rv = []
@@ -344,6 +340,7 @@ class Twitter(object):
             txml.Statuses, extra_args=extra_args)
 
     def mentions(self, delegate, params={}, extra_args=None):
+        # XXX statuses/mentions_timeline in 1.1
         return self.__get('/statuses/mentions.xml', delegate, params,
             txml.Statuses, extra_args=extra_args)
 
@@ -366,6 +363,7 @@ class Twitter(object):
 
     def public_timeline(self, delegate, params={}, extra_args=None):
         "Get the most recent public timeline."
+        # XXX: removed. Maybe replace with statuses/sample
 
         return self.__get('/statuses/public_timeline.atom', delegate, params,
                           extra_args=extra_args)
@@ -396,6 +394,7 @@ class Twitter(object):
         """Get the most recent replies for the authenticating user.
 
         See search for example of how results are returned."""
+        # XXX: gone
         return self.__get('/statuses/replies.atom', delegate, params,
                           extra_args=extra_args)
 
@@ -458,6 +457,8 @@ class Twitter(object):
         """Get the list of friends for a user.
 
         Calls the delegate with each user object found."""
+        # XXX: Deprecated in 1.0, no longer available in 1.1.
+        # XXX: Use friends/ids + users/lookup instead.
         if user:
             url = '/statuses/friends/' + user + '.xml'
         else:
@@ -485,18 +486,33 @@ class Twitter(object):
     def list_members(self, delegate, user, list_name, params={}, extra_args=None, page_delegate=None):
         return self.__get_maybe_paging('/%s/%s/members.xml' % (user, list_name), delegate, params, txml.PagedUserList, extra_args, page_delegate=page_delegate)
 
-    def show_user(self, user):
+
+    def show_user(self, user_id=None, screen_name=None, args=None):
         """Get the info for a specific user.
 
         Returns a delegate that will receive the user in a callback."""
 
-        url = '/users/show/%s.xml' % (user)
-        d = defer.Deferred()
+        args = args or {}
 
-        self.__downloadPage(url, txml.Users(lambda u: d.callback(u))) \
-            .addErrback(lambda e: d.errback(e))
+        if user_id is not None:
+            args['user_id'] = user_id
+        if screen_name is not None:
+            args['screen_name'] = screen_name
+
+        url = BASE_URL + '/users/show.json'
+
+        authHeaders = self._makeAuthHeader("GET", url, args)
+        rawHeaders = dict([(name, [value])
+                           for name, value
+                           in authHeaders.iteritems()])
+        headers = http_headers.Headers(rawHeaders)
+
+        d = treq.get(url, params=args, headers=headers)
+        d.addCallback(treq.json_content)
+        d.addCallback(platform.User.fromDict)
 
         return d
+
 
     def search(self, query, delegate, args=None, extra_args=None):
         """Perform a search query.
